@@ -1,0 +1,152 @@
+---
+####################################################################################
+# Configure WooCommerce settings, pages, permalinks, and an optional demo product. #
+####################################################################################
+
+- name: Download WP-CLI
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+    dest: /usr/local/bin/wp
+    owner: root
+    group: root
+    mode: '0755'  # rwxr-xr-x
+
+- name: Check WordPress installation
+  ansible.builtin.command: wp core is-installed --path={{ wp_install_dir }}
+  become_user: www-data  # Execute this task as the Linux user "www-data" (requires "become: true").
+  register: wp_installed  # Store the task's result in a variable named "wp_installed".
+  changed_when: false   # Report "ok", not "changed".
+  failed_when: wp_installed.rc not in [0, 1]  # 0 = installed; 1 = not installed; others = errors.
+
+- name: Initialize WordPress when needed
+  ansible.builtin.command:
+    argv:
+      - wp
+      - core
+      - install
+      - --path={{ wp_install_dir }}
+      - --url={{ wp_site_url }}
+      - --title={{ wp_site_title }}
+      - --admin_user={{ wp_admin_user }}
+      - --admin_password={{ wp_admin_password }}
+      - --admin_email={{ wp_admin_email }}
+      - --skip-email
+  become_user: www-data
+  when: wp_installed.rc == 1  # when not installed
+  no_log: true
+
+- name: Check WooCommerce installation
+  ansible.builtin.command: wp plugin is-installed woocommerce --path={{ wp_install_dir }}
+  become_user: www-data
+  register: woo_installed
+  changed_when: false
+  failed_when: woo_installed.rc not in [0, 1]
+
+- name: Install WooCommerce
+  ansible.builtin.command: wp plugin install woocommerce --path={{ wp_install_dir }}
+  become_user: www-data
+  when: woo_installed.rc == 1
+
+- name: Check WooCommerce activation
+  ansible.builtin.command: wp plugin is-active woocommerce --path={{ wp_install_dir }}
+  become_user: www-data
+  register: woo_active
+  changed_when: false
+  failed_when: woo_active.rc not in [0, 1]
+
+- name: Activate WooCommerce
+  ansible.builtin.command: wp plugin activate woocommerce --path={{ wp_install_dir }}
+  become_user: www-data
+  when: woo_active.rc == 1
+
+- name: Read current WordPress permalink structure
+  ansible.builtin.command:
+    argv:
+      - wp
+      - option
+      - get
+      - permalink_structure
+      - --path={{ wp_install_dir }}
+  become_user: www-data
+  register: wp_permalink
+  changed_when: false
+
+- name: Enable readable URLs if WordPress still uses plain permalinks
+  ansible.builtin.command:
+    argv:
+      - wp
+      - rewrite
+      - structure
+      - /%postname%/
+      - --path={{ wp_install_dir }}
+  become_user: www-data
+  when: wp_permalink.stdout | trim == ''  # Run only if the current permalink structure is empty (ignoring whitespace).
+
+- name: Check storefront pages
+  ansible.builtin.command:
+    argv:
+      - wp
+      - eval
+      - "foreach (['shop','cart','checkout','myaccount'] as $name) { if (wc_get_page_id($name) <= 0) { exit(1); } }"
+      - --path={{ wp_install_dir }}
+  become_user: www-data
+  register: woo_pages
+  changed_when: false
+  failed_when: woo_pages.rc not in [0, 1]
+
+- name: Create missing WooCommerce pages
+  ansible.builtin.command: wp eval 'WC_Install::create_pages();' --path={{ wp_install_dir }}
+  become_user: www-data
+  when: woo_pages.rc == 1
+
+- name: Read current WooCommerce settings
+  ansible.builtin.command:
+    argv:
+      - wp
+      - option
+      - get
+      - "{{ item.key }}"
+      - --path={{ wp_install_dir }}
+  become_user: www-data
+  register: woo_options
+  changed_when: false
+  failed_when: woo_options.rc not in [0, 1]
+  loop:
+    - { key: woocommerce_currency, value: "{{ woo_currency }}" }
+    - { key: woocommerce_default_country, value: "{{ woo_country }}" }
+
+- name: Configure WooCommerce currency and country
+  ansible.builtin.command:
+    argv:
+      - wp
+      - option
+      - update
+      - "{{ item.item.key }}"
+      - "{{ item.item.value }}"
+      - --path={{ wp_install_dir }}
+  become_user: www-data
+  loop: "{{ woo_options.results }}"
+  when: item.rc == 1 or item.stdout | trim != item.item.value
+
+- name: Create one example product if missing
+  ansible.builtin.command:
+    argv:
+      - wp
+      - eval
+      - |
+        $sku = 'liora-demo-product';
+        if (wc_get_product_id_by_sku($sku)) { echo 'exists'; }
+        else {
+          $p = new WC_Product_Simple();
+          $p->set_name('Liora Demo Product');
+          $p->set_sku($sku);
+          $p->set_status('publish');
+          $p->set_regular_price('9.90');
+          $p->save();
+          echo 'created';
+        }
+      - --path={{ wp_install_dir }}
+  become_user: www-data
+  register: demo_product
+  changed_when: "'created' in demo_product.stdout"
+  when: woo_create_demo_product | bool

@@ -1,0 +1,106 @@
+---
+###########################################################
+# Install and configure WordPress with Nginx and PHP-FPM. #
+###########################################################
+
+- name: Install Nginx, PHP 8.3, and WordPress dependencies (Ubuntu 24.04)
+  ansible.builtin.apt:
+    name:
+      - acl
+      - nginx
+      - php8.3-fpm
+      - php8.3-cli
+      - php8.3-mysql
+      - php8.3-curl
+      - php8.3-gd
+      - php8.3-mbstring
+      - php8.3-xml
+      - php8.3-zip
+      - php8.3-intl
+      - php8.3-bcmath
+      - php8.3-soap
+      - ca-certificates
+      - tar
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Ensure PHP-FPM is running
+  ansible.builtin.service:
+    name: php8.3-fpm
+    state: started
+    enabled: true
+
+- name: Download WordPress release archive
+  ansible.builtin.get_url:
+    url: https://wordpress.org/latest.tar.gz
+    dest: /var/tmp/wordpress-latest.tar.gz
+    mode: '0644'  # rw-r--r--
+
+- name: Extract WordPress once
+  ansible.builtin.unarchive:
+    src: /var/tmp/wordpress-latest.tar.gz
+    dest: /var/www
+    remote_src: true
+    creates: "{{ wp_install_dir }}/wp-settings.php"
+
+- name: Set WordPress directory ownership
+  ansible.builtin.file:
+    path: "{{ wp_install_dir }}"
+    owner: www-data  # Linux user traditionally used by web servers.
+    group: www-data  # Linux group traditionally used by web servers.
+    state: directory
+    recurse: true  # Apply ownership recursively to all files and subdirectories.
+
+- name: Ensure WordPress document root has safe directory permissions
+  ansible.builtin.file:
+    path: "{{ wp_install_dir }}"
+    state: directory
+    mode: '0755'  # rwxr-xr-x (applies only to this directory, not recursively)
+
+- name: Render WordPress configuration with database credentials and salts
+  ansible.builtin.template:
+    src: wp-config.php.j2
+    dest: "{{ wp_install_dir }}/wp-config.php"
+    owner: www-data
+    group: www-data
+    mode: '0640'  # rw-r-----
+  no_log: true
+
+# Disable the default Nginx site by removing its symlink.
+# Restart Nginx only if the symlink was removed.
+- name: Remove Nginx default site to avoid conflicting listener
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Restart Nginx
+
+- name: Configure Nginx for WordPress (local-only demo)
+  ansible.builtin.template:
+    src: wordpress.conf.j2
+    dest: /etc/nginx/sites-available/wordpress.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart Nginx
+
+# Enable the WordPress site by linking its configuration into sites-enabled, where Nginx loads active site configurations.
+- name: Enable WordPress Nginx site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/wordpress.conf
+    dest: /etc/nginx/sites-enabled/wordpress.conf
+    state: link
+  notify: Restart Nginx
+
+- name: Test Nginx configuration syntax
+  ansible.builtin.command: nginx -t
+  changed_when: false   # Report "ok", not "changed".
+
+- name: Ensure Nginx is started and enabled
+  ansible.builtin.service:
+    name: nginx
+    state: started
+    enabled: true
+
+- name: Install and configure WooCommerce with WP-CLI
+  ansible.builtin.import_tasks: woocommerce.yml

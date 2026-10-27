@@ -1,0 +1,5 @@
+.secrets/
+evidence/
+*.retry
+*.zip
+__pycache__/

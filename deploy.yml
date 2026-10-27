@@ -1,0 +1,12 @@
+---
+- name: Configure WordPress database
+  hosts: database
+  become: true  # Use privilege escalation (sudo) to execute tasks as root.
+  roles:
+    - mysql
+
+- name: Deploy WordPress application
+  hosts: webserver
+  become: true  # Use privilege escalation (sudo) to execute tasks as root.
+  roles:
+    - wordpress

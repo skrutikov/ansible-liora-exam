@@ -1,0 +1,45 @@
+# Define a virtual web server.
+server {
+
+    # Listen on HTTP port 80, but only on this machine (127.0.0.1).
+    # default_server means this is the fallback server for this address and port.
+    listen 127.0.0.1:80 default_server;
+
+    # Hostname this server responds to.
+    server_name localhost;
+
+    # Directory containing the website files.
+    root {{ wp_install_dir }};
+
+    # Files to look for when a directory is requested, in this order.
+    index index.php index.html;
+
+    # Handle ordinary HTTP requests (the general URL-path fallback).
+    location / {
+        # First try the requested file ($uri), then the directory ($uri/).
+        # If neither exists, forward internally to WordPress (index.php).
+        # ($args preserves the original URL query parameters.)
+        try_files $uri $uri/ /index.php?$args;
+    }
+
+    # Handle requests whose URL path ends with ".php".
+    location ~ \.php$ {
+        # Load Ubuntu's standard FastCGI configuration for PHP.
+        include snippets/fastcgi-php.conf;
+        # Forward PHP requests to PHP-FPM through its Unix socket.
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+    }
+
+    # Deny access to URL paths containing "/." (e.g., "/.git/config").
+    # (Note: An earlier matching regex location can take precedence.)
+    location ~ /\. {
+        # Return HTTP 403 Forbidden.
+        deny all;
+    }
+
+    # Block direct HTTP access to the WordPress configuration file.
+    location = /wp-config.php {
+        # Return HTTP 403 Forbidden.
+        deny all;
+    }
+}

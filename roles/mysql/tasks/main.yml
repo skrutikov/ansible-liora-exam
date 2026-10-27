@@ -1,0 +1,67 @@
+---
+#############################################################################
+# Install and configure MySQL, then create the WordPress database and user. #
+#############################################################################
+
+# Refresh the APT package index if its cache is older 1 hour.
+# Install "mysql-server" and "python3-pymysql" only if they are missing.
+- name: Install MySQL server and PyMySQL dependency
+  ansible.builtin.apt:
+    name:
+      - mysql-server
+      - python3-pymysql
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# Ensure that bind-address is set to 127.0.0.1 in mysqld.cnf'.
+# (If the setting doesn't exist, insert it after "[mysqld]".)
+# Notify the MySQL restart handler if the file changes.
+- name: Restrict MySQL to local connections
+  ansible.builtin.lineinfile:
+    path: /etc/mysql/mysql.conf.d/mysqld.cnf
+    regexp: '^\s*bind-address\s*='
+    insertafter: '^\[mysqld\]'
+    line: 'bind-address = 127.0.0.1'
+  notify: Restart MySQL
+
+# Ensure that the MySQL service is running and starts automatically when Linux boots.
+# (Do not restart it if it is already running.)
+- name: Start and enable MySQL
+  ansible.builtin.service:
+    name: mysql
+    state: started
+    enabled: true
+
+# Ensure that MySQL has applied the configuration changes before creating the database.
+- name: Apply MySQL configuration before provisioning
+  ansible.builtin.meta: flush_handlers
+
+# Ensure that the WordPress database exists, using UTF-8 encoding and Unicode collation.
+# Connect to the local MySQL server through its Unix socket rather than TCP.
+# Ignore MySQL client configuration files and use the local administrative authentication.
+- name: Create WordPress database
+  ansible.mysql.mysql_db:
+    name: "{{ wp_db_name }}"
+    encoding: utf8mb4
+    collation: utf8mb4_unicode_ci
+    state: present
+    config_file: ''
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+
+# Ensure that the WordPress database user exists and can connect only from localhost.
+# Grant this user all privileges on the WordPress database, but not on other databases.
+# Set the password only when creating the user; do not overwrite it on subsequent runs.
+# Connect through the local Unix socket (as in the previous task).
+# Hide task arguments and results from Ansible logs (because they contain the database password).
+- name: Create WordPress database account (localhost only)
+  ansible.mysql.mysql_user:
+    name: "{{ wp_db_user }}"
+    host: localhost
+    password: "{{ wp_db_password }}"
+    priv: "{{ wp_db_name }}.*:ALL"
+    update_password: on_create
+    state: present
+    config_file: ''
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  no_log: true
